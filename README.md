@@ -1,62 +1,61 @@
-# 🎨 Hearitage — AI Museum Guide (M2)
+# 🎨 Hearitage — AI Museum Guide (M3)
 
-> iPhone camera -> Claude Vision -> structured painting result.
+> Production-first validation on Vercel: iPhone camera -> Claude Vision -> structured JSON result.
 
-## Quick Start
+## Where To Put Anthropic Key (Best Practices)
 
-```bash
-npm install
-```
+1. Store `ANTHROPIC_API_KEY` only in Vercel Environment Variables.
+2. Never use `NEXT_PUBLIC_ANTHROPIC_API_KEY`.
+3. Do not commit keys to git or `.env` files in repo.
+4. Use separate keys:
+   - `Production`: main key with monitored budget.
+   - `Preview`: separate key with lower limits.
+5. Rotate keys if leakage is suspected; redeploy after updating env vars.
 
-Configure `.env.local`:
+## Vercel Environment Setup
 
-```env
-ANTHROPIC_API_KEY=sk-ant-your-real-key
-# optional
-# ANTHROPIC_MODEL=claude-sonnet-4-20250514
-```
+In Vercel Project -> Settings -> Environment Variables add:
 
-## iPhone Runbook (Recommended: Cloudflare Tunnel)
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_MODEL` (optional, default: `claude-sonnet-4-20250514`)
 
-### 1) Install cloudflared (without brew)
+Assign env scopes explicitly:
 
-```bash
-./scripts/install-cloudflared-macos.sh
-```
+- `Production`
+- `Preview`
+- `Development` (optional for Vercel dev workflows)
 
-If needed, add the install folder to PATH:
+After any env change: **redeploy**. Existing deployments do not automatically receive updated values.
 
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
+## Vercel Production Validation (Primary)
 
-### 2) Start app + tunnel on Mac
+### 1) Confirm deployment is current
 
-Terminal A:
+1. Push latest `main`.
+2. In Vercel dashboard open latest `Production` deployment.
+3. Verify build commit hash matches local `main`.
 
-```bash
-npm run dev:mobile
-```
-
-Terminal B:
+### 2) Preflight API check against production URL
 
 ```bash
-cloudflared tunnel --url http://localhost:3000
-```
-
-Copy the `https://...trycloudflare.com` URL and open it in Safari on iPhone.
-
-### 3) Preflight check (must return JSON)
-
-```bash
-curl -i -X POST "https://<your-tunnel-domain>/api/recognize" \
+curl -i -X POST "https://<your-production-domain>/api/recognize" \
   -H "Content-Type: application/json" \
+  -H "x-request-id: preflight-prod-001" \
   -d '{"imageBase64":"data:image/jpeg;base64,Zm9v"}'
 ```
 
 Expected:
+
 - `Content-Type: application/json`
-- JSON body with either success payload or error payload
+- JSON body containing `requestId`
+- On failure, JSON with `code` (no HTML interstitial)
+
+### 3) iPhone production test
+
+1. Open `https://<your-production-domain>` in Safari on iPhone.
+2. Allow camera access.
+3. Run test set of 5 paintings (from monitor/photo prints).
+4. Capture `requestId` for each attempt from UI.
 
 ## API Contract (`POST /api/recognize`)
 
@@ -80,37 +79,35 @@ Error:
 ```json
 {
   "error": "string",
-  "code": "bad_request|billing|timeout|upstream_error|non_json_response|network",
+  "code": "bad_request|misconfigured_env|billing|timeout|upstream_error|non_json_response|network",
   "requestId": "string"
 }
 ```
 
-Every response also includes header `x-request-id`.
+Response header always includes `x-request-id`.
 
-## How To Prove Request Reached Claude
+## How To Prove Request Reached Claude (Vercel)
 
-1. In UI error/success state, copy `requestId`.
-2. In dev server logs, find records with the same `requestId`.
-3. Successful Claude path has stages:
+1. Copy `requestId` from UI.
+2. In Vercel -> Project -> Logs, search by this `requestId`.
+3. If request reached Claude, you should see:
    - `claude_call_start`
-   - `claude_call_end`
-4. Failed Claude path has:
-   - `claude_call_error`
+   - `claude_call_end` or `claude_call_error`
 
-## Camera + Recognition Troubleshooting
+## Troubleshooting Matrix
 
 | Symptom | Probable Cause | Action |
 |---|---|---|
-| Camera error says HTTPS required | Insecure context | Open only tunnel HTTPS URL |
-| Green indicator, black preview | Playback/attachment issue | Tap `Retry camera`, keep page foregrounded |
-| `code=billing` | Claude credits exhausted | Top up Anthropic credits |
-| `code=timeout` | Upstream timeout | Retry once, verify network quality |
-| `code=non_json_response` | Tunnel/proxy injected non-JSON page | Restart `cloudflared` and retry |
-| `code=network` | Connectivity issue | Verify Mac internet and tunnel status |
+| `code=misconfigured_env` | `ANTHROPIC_API_KEY` missing in deployment env | Add key in Vercel env vars, redeploy |
+| `code=billing` | Anthropic credits exhausted | Top up Anthropic account credits |
+| `code=timeout` | Claude timeout / network latency | Retry request, verify network |
+| `code=upstream_error` | Temporary upstream failure | Retry once; inspect Vercel logs |
+| `code=non_json_response` | Proxy/tunnel returned HTML | Verify production URL and CDN path |
+| `code=network` | Server-to-Claude networking issue | Check Vercel function logs and retry |
 
-## M2 Validation (5 paintings)
+## M3 Validation Protocol (5 Paintings)
 
-Target: at least `4/5` successful recognitions.
+Goal: `>=4/5` correct recognitions on production.
 
 | Painting input | requestId | HTTP status | result/error code | recognized name | pass/fail |
 |---|---|---|---|---|---|
@@ -120,10 +117,23 @@ Target: at least `4/5` successful recognitions.
 | Girl with a Pearl Earring |  |  |  |  |  |
 | The Night Watch |  |  |  |  |  |
 
-## Legacy Fallback (not recommended)
-
-`localtunnel` may require password and can return HTML interstitial responses:
+## Local Development (Optional)
 
 ```bash
-npx localtunnel --port 3000
+npm install
+```
+
+Local `.env.local` for development only:
+
+```env
+ANTHROPIC_API_KEY=sk-ant-your-real-key
+# optional
+# ANTHROPIC_MODEL=claude-sonnet-4-20250514
+```
+
+For local iPhone checks (not production):
+
+```bash
+npm run dev:mobile
+npm run tunnel:cloudflare
 ```

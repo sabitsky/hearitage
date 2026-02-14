@@ -282,8 +282,8 @@ export async function POST(request: Request) {
     return createErrorResponse(
       requestId,
       500,
-      "bad_request",
-      "ANTHROPIC_API_KEY is missing. Add a real key to .env.local and restart dev server.",
+      "misconfigured_env",
+      "Server misconfiguration: set ANTHROPIC_API_KEY in deployment environment variables.",
     );
   }
 

@@ -24,6 +24,8 @@ const confidenceStyleMap: Record<RecognitionResponse["confidence"], string> = {
 
 const humanMessageByCode: Record<RecognitionErrorCode, string> = {
   bad_request: "Некорректный запрос распознавания. Переснимите картину и попробуйте снова.",
+  misconfigured_env:
+    "Server misconfiguration: missing ANTHROPIC_API_KEY in deployment.",
   billing:
     "Не хватает баланса Claude API. Пополните кредиты и повторите попытку.",
   timeout: "Claude не ответил вовремя. Проверьте сеть и попробуйте еще раз.",

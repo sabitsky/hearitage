@@ -1,6 +1,7 @@
 export type RecognitionConfidence = "high" | "medium" | "low";
 export type RecognitionErrorCode =
   | "bad_request"
+  | "misconfigured_env"
   | "billing"
   | "timeout"
   | "upstream_error"
