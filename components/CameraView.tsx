@@ -1,40 +1,141 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-type CameraStatus = "idle" | "ready" | "error";
+type CameraStatus = "idle" | "loading" | "ready" | "error";
+type CameraErrorCode =
+  | "api_unavailable"
+  | "secure_context"
+  | "permission_denied"
+  | "camera_busy"
+  | "camera_not_found"
+  | "playback_failed"
+  | "unknown";
 
 type CameraViewProps = {
-  onRecognize?: (imageBase64: string) => void;
+  onRecognize?: (imageBase64: string) => Promise<void> | void;
+  isRecognizing?: boolean;
 };
 
 const MAX_IMAGE_SIZE = 1024;
 const JPEG_QUALITY = 0.7;
 
-export default function CameraView({ onRecognize }: CameraViewProps) {
+const CAMERA_ERROR_MESSAGES: Record<CameraErrorCode, string> = {
+  api_unavailable:
+    "Camera API is unavailable in this context. Open in Safari and try again.",
+  secure_context:
+    "Камера требует HTTPS. Откройте страницу через tunnel URL (https://...loca.lt).",
+  permission_denied:
+    "Доступ к камере отклонен. Разрешите камеру для сайта и нажмите Retry camera.",
+  camera_busy:
+    "Камера занята другим приложением. Закройте Camera/Telegram/Zoom и нажмите Retry camera.",
+  camera_not_found:
+    "Камера не найдена. Проверьте устройство или попробуйте загрузить фото.",
+  playback_failed:
+    "Не удалось запустить превью камеры. Нажмите Retry camera.",
+  unknown: "Не удалось запустить камеру. Нажмите Retry camera.",
+};
+
+const getErrorName = (error: unknown) => {
+  if (!error || typeof error !== "object") return "";
+  const maybeName = (error as { name?: unknown }).name;
+  return typeof maybeName === "string" ? maybeName : "";
+};
+
+export default function CameraView({
+  onRecognize,
+  isRecognizing = false,
+}: CameraViewProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const [status, setStatus] = useState<CameraStatus>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<CameraErrorCode | null>(null);
   const [imageData, setImageData] = useState<string | null>(null);
+  const [retryNonce, setRetryNonce] = useState(0);
+
+  const setCameraFailure = useCallback((code: CameraErrorCode) => {
+    setErrorCode(code);
+    setError(CAMERA_ERROR_MESSAGES[code]);
+    setStatus("error");
+  }, []);
+
+  const stopStream = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const attachStreamToVideo = useCallback(async () => {
+    const stream = streamRef.current;
+    const videoElement = videoRef.current;
+    if (!stream || !videoElement) return false;
+
+    try {
+      if (videoElement.srcObject !== stream) {
+        videoElement.srcObject = stream;
+      }
+      await videoElement.play();
+      return true;
+    } catch {
+      setCameraFailure("playback_failed");
+      return false;
+    }
+  }, [setCameraFailure]);
+
+  useEffect(() => {
+    if (status !== "ready" || imageData) return;
+    void attachStreamToVideo();
+  }, [status, imageData, attachStreamToVideo]);
 
   useEffect(() => {
     let isActive = true;
 
     const startCamera = async () => {
-      if (!navigator?.mediaDevices?.getUserMedia) {
-        setError("Camera API is not supported in this браузер.");
-        setStatus("error");
+      setStatus("loading");
+      setError(null);
+      setErrorCode(null);
+
+      if (!window.isSecureContext) {
+        setCameraFailure("secure_context");
         return;
       }
 
+      if (!navigator?.mediaDevices?.getUserMedia) {
+        setCameraFailure("api_unavailable");
+        return;
+      }
+
+      stopStream();
+
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false,
-        });
+        let stream: MediaStream;
+
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { ideal: "environment" } },
+            audio: false,
+          });
+        } catch (preferredError) {
+          const preferredErrorName = getErrorName(preferredError);
+          if (
+            preferredErrorName === "OverconstrainedError" ||
+            preferredErrorName === "NotFoundError"
+          ) {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: true,
+              audio: false,
+            });
+          } else {
+            throw preferredError;
+          }
+        }
 
         if (!isActive) {
           stream.getTracks().forEach((track) => track.stop());
@@ -42,26 +143,39 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
         }
 
         streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
         setStatus("ready");
-      } catch (err) {
-        setError("Не удалось получить доступ к камере. Проверьте разрешения.");
-        setStatus("error");
+        await attachStreamToVideo();
+      } catch (cameraError) {
+        const errorName = getErrorName(cameraError);
+
+        if (errorName === "NotAllowedError") {
+          setCameraFailure("permission_denied");
+          return;
+        }
+        if (errorName === "NotReadableError") {
+          setCameraFailure("camera_busy");
+          return;
+        }
+        if (errorName === "SecurityError") {
+          setCameraFailure("secure_context");
+          return;
+        }
+        if (errorName === "NotFoundError") {
+          setCameraFailure("camera_not_found");
+          return;
+        }
+
+        setCameraFailure("unknown");
       }
     };
 
-    startCamera();
+    void startCamera();
 
     return () => {
       isActive = false;
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((track) => track.stop());
-      }
+      stopStream();
     };
-  }, []);
+  }, [retryNonce, attachStreamToVideo, setCameraFailure, stopStream]);
 
   const resizeToCanvas = (source: HTMLImageElement | HTMLVideoElement) => {
     const canvas = canvasRef.current;
@@ -99,10 +213,14 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
     setImageData(null);
   };
 
-  const handleRecognize = () => {
-    if (imageData && onRecognize) {
-      onRecognize(imageData);
-    }
+  const handleRetryCamera = () => {
+    setImageData(null);
+    setRetryNonce((previous) => previous + 1);
+  };
+
+  const handleRecognize = async () => {
+    if (!imageData || !onRecognize || isRecognizing) return;
+    await onRecognize(imageData);
   };
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -121,6 +239,7 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
           setImageData(dataUrl);
           setStatus("ready");
           setError(null);
+          setErrorCode(null);
         }
       };
       image.src = result;
@@ -129,7 +248,7 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
     reader.readAsDataURL(file);
   };
 
-  const showVideo = !imageData && status === "ready";
+  const showVideoLayer = !imageData;
   const showPlaceholder = !imageData && status !== "ready";
 
   return (
@@ -141,10 +260,12 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
           <div className="absolute bottom-3 left-3 w-6 h-6 border-b-2 border-l-2 border-brand-400/40 rounded-bl-sm" />
           <div className="absolute bottom-3 right-3 w-6 h-6 border-b-2 border-r-2 border-brand-400/40 rounded-br-sm" />
 
-          {showVideo ? (
+          {showVideoLayer ? (
             <video
               ref={videoRef}
-              className="w-full h-full object-cover"
+              className={`w-full h-full object-cover transition-opacity duration-200 ${
+                status === "ready" ? "opacity-100" : "opacity-0"
+              }`}
               playsInline
               muted
               autoPlay
@@ -178,7 +299,9 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
                 </svg>
               </div>
               <p className="text-[var(--color-text-muted)] text-sm leading-relaxed">
-                {status === "error" ? "Camera is unavailable." : "Camera will appear here."}
+                {status === "loading"
+                  ? "Starting camera..."
+                  : "Camera is unavailable."}
                 <br />
                 <span className="text-xs opacity-60">
                   Point at any painting to identify it.
@@ -186,6 +309,11 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
               </p>
               {error ? (
                 <p className="mt-3 text-xs text-brand-400/80">{error}</p>
+              ) : null}
+              {errorCode === "secure_context" ? (
+                <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+                  Use a tunnel URL like <code>https://your-name.loca.lt</code>.
+                </p>
               ) : null}
             </div>
           ) : null}
@@ -197,14 +325,15 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
           <>
             <button
               onClick={handleRecognize}
-              disabled={!onRecognize}
+              disabled={!onRecognize || isRecognizing}
               className="w-full py-4 rounded-2xl bg-brand-500 disabled:bg-brand-500/50 hover:bg-brand-600 active:scale-[0.98] text-white font-semibold text-base tracking-wide transition-all duration-200 ease-out shadow-[0_0_30px_rgba(214,125,36,0.2)]"
             >
-              Recognize Painting
+              {isRecognizing ? "Analyzing..." : "Recognize Painting"}
             </button>
             <button
               onClick={handleRetake}
-              className="w-full py-3 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition"
+              disabled={isRecognizing}
+              className="w-full py-3 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50 disabled:cursor-not-allowed transition"
             >
               Retake
             </button>
@@ -218,21 +347,30 @@ export default function CameraView({ onRecognize }: CameraViewProps) {
           <>
             <button
               onClick={handleCapture}
-              disabled={status !== "ready"}
+              disabled={status !== "ready" || isRecognizing}
               className="w-full py-4 rounded-2xl bg-brand-500 disabled:bg-brand-500/40 hover:bg-brand-600 active:scale-[0.98] text-white font-semibold text-base tracking-wide transition-all duration-200 ease-out shadow-[0_0_30px_rgba(214,125,36,0.2)]"
             >
               Scan Painting
             </button>
             {status === "error" ? (
-              <label className="w-full flex items-center justify-center py-3 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition cursor-pointer">
-                Upload photo
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={handleFileUpload}
-                />
-              </label>
+              <>
+                <button
+                  onClick={handleRetryCamera}
+                  disabled={isRecognizing}
+                  className="w-full py-3 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50 disabled:cursor-not-allowed transition"
+                >
+                  Retry camera
+                </button>
+                <label className="w-full flex items-center justify-center py-3 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition cursor-pointer">
+                  Upload photo
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleFileUpload}
+                  />
+                </label>
+              </>
             ) : null}
           </>
         )}
