@@ -1,12 +1,19 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { randomUUID } from "crypto";
 import { NextResponse } from "next/server";
-import type { RecognitionConfidence, RecognitionResponse } from "@/lib/types";
+import type {
+  RecognitionConfidence,
+  RecognitionErrorCode,
+  RecognitionErrorResponse,
+  RecognitionResponse,
+} from "@/lib/types";
 
 const DEFAULT_MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-20250514";
 const IMAGE_DATA_URL_PATTERN =
   /^data:(image\/(?:jpeg|jpg|png|gif|webp));base64,([A-Za-z0-9+/=]+)$/;
+const RECOGNIZE_TIMEOUT_MS = 30_000;
 
-const FALLBACK_RESPONSE: RecognitionResponse = {
+const FALLBACK_RESPONSE: Omit<RecognitionResponse, "requestId"> = {
   painting: "unknown",
   artist: "unknown",
   year: "unknown",
@@ -19,6 +26,13 @@ const FALLBACK_RESPONSE: RecognitionResponse = {
 
 type RecognizeRequestBody = {
   imageBase64?: unknown;
+};
+
+type NormalizedError = {
+  code: RecognitionErrorCode;
+  status: number;
+  message: string;
+  retryable: boolean;
 };
 
 const normalizeMediaType = (
@@ -54,7 +68,7 @@ const asConfidence = (value: unknown): RecognitionConfidence => {
   return "low";
 };
 
-const sanitizeResponse = (raw: unknown): RecognitionResponse => {
+const sanitizeResponse = (raw: unknown): Omit<RecognitionResponse, "requestId"> => {
   if (!raw || typeof raw !== "object") return FALLBACK_RESPONSE;
   const payload = raw as Record<string, unknown>;
 
@@ -94,25 +108,166 @@ const parseRequestBody = async (request: Request): Promise<RecognizeRequestBody 
   }
 };
 
+const createRequestId = (request: Request) => {
+  const fromHeader = request.headers.get("x-request-id");
+  if (fromHeader && fromHeader.trim().length > 0 && fromHeader.length <= 120) {
+    return fromHeader.trim();
+  }
+  return randomUUID();
+};
+
+const logStage = (
+  requestId: string,
+  stage: string,
+  details: Record<string, unknown> = {},
+) => {
+  const entry = {
+    scope: "recognize",
+    requestId,
+    stage,
+    timestamp: new Date().toISOString(),
+    ...details,
+  };
+  console.info(JSON.stringify(entry));
+};
+
+const createErrorResponse = (
+  requestId: string,
+  status: number,
+  code: RecognitionErrorCode,
+  message: string,
+) => {
+  const payload: RecognitionErrorResponse = {
+    error: message,
+    code,
+    requestId,
+  };
+  return NextResponse.json(payload, {
+    status,
+    headers: {
+      "x-request-id": requestId,
+    },
+  });
+};
+
+const createSuccessResponse = (
+  requestId: string,
+  payload: Omit<RecognitionResponse, "requestId">,
+) => {
+  const response: RecognitionResponse = {
+    ...payload,
+    requestId,
+  };
+  return NextResponse.json(response, {
+    status: 200,
+    headers: {
+      "x-request-id": requestId,
+    },
+  });
+};
+
+const isBillingIssue = (message: string) =>
+  /billing|credit|balance|payment|fund|quota/i.test(message);
+
+const normalizeError = (error: unknown): NormalizedError => {
+  if (error instanceof Error && error.name === "AbortError") {
+    return {
+      code: "timeout",
+      status: 504,
+      message: "Claude request timed out after 30 seconds. Please try again.",
+      retryable: true,
+    };
+  }
+
+  if (error instanceof Anthropic.APIError) {
+    const message = error.message || "Claude API returned an error.";
+    const status = typeof error.status === "number" ? error.status : 502;
+
+    if (isBillingIssue(message)) {
+      return {
+        code: "billing",
+        status: 402,
+        message:
+          "Claude API billing/credits issue. Top up credits and retry the request.",
+        retryable: false,
+      };
+    }
+
+    if (status === 429 || status >= 500) {
+      return {
+        code: "upstream_error",
+        status: 502,
+        message: `Claude API temporary failure (${status}). Please retry.`,
+        retryable: true,
+      };
+    }
+
+    return {
+      code: "bad_request",
+      status: 400,
+      message: `Claude API rejected request (${status}): ${message}`,
+      retryable: false,
+    };
+  }
+
+  if (error instanceof TypeError) {
+    return {
+      code: "network",
+      status: 502,
+      message: `Network error while contacting Claude API: ${error.message}`,
+      retryable: true,
+    };
+  }
+
+  if (error instanceof Error) {
+    return {
+      code: "upstream_error",
+      status: 502,
+      message: `Unknown Claude API error: ${error.message}`,
+      retryable: false,
+    };
+  }
+
+  return {
+    code: "upstream_error",
+    status: 502,
+    message: "Unknown error while recognizing painting.",
+    retryable: false,
+  };
+};
+
 export async function POST(request: Request) {
+  const requestId = createRequestId(request);
+  logStage(requestId, "received", {
+    contentLength: request.headers.get("content-length") || "unknown",
+    userAgent: request.headers.get("user-agent") || "unknown",
+  });
+
   const body = await parseRequestBody(request);
   const imageBase64 = typeof body?.imageBase64 === "string" ? body.imageBase64.trim() : "";
 
   if (!imageBase64) {
-    return NextResponse.json(
-      { error: "imageBase64 is required in request body." },
-      { status: 400 },
+    logStage(requestId, "validation_failed", {
+      reason: "missing_imageBase64",
+    });
+    return createErrorResponse(
+      requestId,
+      400,
+      "bad_request",
+      "imageBase64 is required in request body.",
     );
   }
 
   const matchedImage = imageBase64.match(IMAGE_DATA_URL_PATTERN);
   if (!matchedImage) {
-    return NextResponse.json(
-      {
-        error:
-          "imageBase64 must be a valid data URL (data:image/jpeg;base64,... or data:image/png;base64,...).",
-      },
-      { status: 400 },
+    logStage(requestId, "validation_failed", {
+      reason: "invalid_data_url",
+    });
+    return createErrorResponse(
+      requestId,
+      400,
+      "bad_request",
+      "imageBase64 must be a valid data URL (data:image/jpeg;base64,... or data:image/png;base64,...).",
     );
   }
 
@@ -121,56 +276,118 @@ export async function POST(request: Request) {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey || apiKey === "sk-ant-your-key-here") {
-    return NextResponse.json(
-      {
-        error:
-          "ANTHROPIC_API_KEY is missing. Add a real key to .env.local and restart dev server.",
-      },
-      { status: 500 },
+    logStage(requestId, "validation_failed", {
+      reason: "missing_api_key",
+    });
+    return createErrorResponse(
+      requestId,
+      500,
+      "bad_request",
+      "ANTHROPIC_API_KEY is missing. Add a real key to .env.local and restart dev server.",
     );
   }
 
-  const anthropic = new Anthropic({ apiKey });
+  logStage(requestId, "validated", {
+    mediaType,
+    payloadChars: encodedImage.length,
+    model: DEFAULT_MODEL,
+  });
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30_000);
+  const anthropic = new Anthropic({ apiKey });
+  let message: Awaited<ReturnType<typeof anthropic.messages.create>> | null = null;
+  let lastError: NormalizedError | null = null;
 
   try {
-    const message = await anthropic.messages.create(
-      {
-        model: DEFAULT_MODEL,
-        max_tokens: 500,
-        temperature: 0.2,
-        system: [
-          "Ты эксперт-искусствовед.",
-          "Проанализируй фото картины.",
-          "Верни только валидный JSON без markdown и пояснений.",
-          "Формат ответа:",
-          '{"painting":"string","artist":"string","year":"string","museum":"string","style":"string","confidence":"high|medium|low","summary":"2-3 предложения на русском"}',
-          'Если не уверен, используй значение "unknown" и confidence "low".',
-        ].join("\n"),
-        messages: [
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), RECOGNIZE_TIMEOUT_MS);
+      logStage(requestId, "claude_call_start", { attempt });
+
+      try {
+        message = await anthropic.messages.create(
           {
-            role: "user",
-            content: [
+            model: DEFAULT_MODEL,
+            max_tokens: 500,
+            temperature: 0.2,
+            system: [
+              "Ты эксперт-искусствовед.",
+              "Проанализируй фото картины.",
+              "Игнорируй рамку камеры, браузерный интерфейс, кнопки и фон вокруг произведения.",
+              "Сосредоточься на самом изображении картины в кадре.",
+              "Верни только валидный JSON без markdown и пояснений.",
+              "Формат ответа:",
+              '{"painting":"string","artist":"string","year":"string","museum":"string","style":"string","confidence":"high|medium|low","summary":"2-3 предложения на русском"}',
+              'Если не уверен, используй значение "unknown" и confidence "low".',
+            ].join("\n"),
+            messages: [
               {
-                type: "image",
-                source: {
-                  type: "base64",
-                  media_type: mediaType,
-                  data: encodedImage,
-                },
-              },
-              {
-                type: "text",
-                text: "Определи картину по фото и верни ответ строго как JSON.",
+                role: "user",
+                content: [
+                  {
+                    type: "image",
+                    source: {
+                      type: "base64",
+                      media_type: mediaType,
+                      data: encodedImage,
+                    },
+                  },
+                  {
+                    type: "text",
+                    text:
+                      "Определи изображение картины в кадре и верни ответ строго как JSON по заданной схеме.",
+                  },
+                ],
               },
             ],
           },
-        ],
-      },
-      { signal: controller.signal },
-    );
+          { signal: controller.signal },
+        );
+
+        logStage(requestId, "claude_call_end", {
+          attempt,
+          latencyMs: Date.now() - startedAt,
+          inputTokens: message.usage?.input_tokens ?? null,
+          outputTokens: message.usage?.output_tokens ?? null,
+        });
+        break;
+      } catch (error) {
+        const normalizedError = normalizeError(error);
+        lastError = normalizedError;
+        logStage(requestId, "claude_call_error", {
+          attempt,
+          code: normalizedError.code,
+          status: normalizedError.status,
+          retryable: normalizedError.retryable,
+          message: normalizedError.message,
+        });
+
+        if (attempt === 2 || !normalizedError.retryable) {
+          return createErrorResponse(
+            requestId,
+            normalizedError.status,
+            normalizedError.code,
+            normalizedError.message,
+          );
+        }
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    if (!message) {
+      const unknownError = lastError ?? {
+        code: "upstream_error" as const,
+        status: 502,
+        message: "Claude API call failed with unknown reason.",
+      };
+      return createErrorResponse(
+        requestId,
+        unknownError.status,
+        unknownError.code,
+        unknownError.message,
+      );
+    }
 
     const modelText = message.content
       .map((block) => (block.type === "text" ? block.text : ""))
@@ -179,35 +396,33 @@ export async function POST(request: Request) {
 
     const extractedJson = extractJson(modelText);
     if (!extractedJson) {
-      return NextResponse.json(FALLBACK_RESPONSE);
+      logStage(requestId, "model_response_fallback", {
+        reason: "missing_json",
+      });
+      return createSuccessResponse(requestId, FALLBACK_RESPONSE);
     }
 
     try {
       const parsed = JSON.parse(extractedJson) as unknown;
-      return NextResponse.json(sanitizeResponse(parsed));
+      return createSuccessResponse(requestId, sanitizeResponse(parsed));
     } catch {
-      return NextResponse.json(FALLBACK_RESPONSE);
+      logStage(requestId, "model_response_fallback", {
+        reason: "invalid_json",
+      });
+      return createSuccessResponse(requestId, FALLBACK_RESPONSE);
     }
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      return NextResponse.json(
-        { error: "Claude request timed out after 30 seconds. Please try again." },
-        { status: 504 },
-      );
-    }
-
-    if (error instanceof Error) {
-      return NextResponse.json(
-        { error: `Claude API request failed: ${error.message}` },
-        { status: 502 },
-      );
-    }
-
-    return NextResponse.json(
-      { error: "Unknown error while recognizing painting." },
-      { status: 502 },
+    const normalizedError = normalizeError(error);
+    logStage(requestId, "error", {
+      code: normalizedError.code,
+      status: normalizedError.status,
+      message: normalizedError.message,
+    });
+    return createErrorResponse(
+      requestId,
+      normalizedError.status,
+      normalizedError.code,
+      normalizedError.message,
     );
-  } finally {
-    clearTimeout(timeoutId);
   }
 }

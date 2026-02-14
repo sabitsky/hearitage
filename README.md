@@ -1,146 +1,129 @@
-# 🎨 Hearitage — AI Museum Guide (M1)
+# 🎨 Hearitage — AI Museum Guide (M2)
 
-> Point your camera at a painting and get an AI response.
+> iPhone camera -> Claude Vision -> structured painting result.
 
 ## Quick Start
 
 ```bash
-# 1. Install dependencies
-npm install
-
-# 2. Configure environment
-# Edit .env.local and set a real Anthropic key
-# ANTHROPIC_API_KEY=sk-ant-...
-# Optional:
-# ANTHROPIC_MODEL=claude-sonnet-4-20250514
-
-# 3. Run desktop dev
-npm run dev
-
-# 4. Run for phone in local network
-npm run dev:mobile
-```
-
-## M1 iPhone Test Runbook
-
-### 1. Prepare local environment
-
-```bash
 npm install
 ```
 
-Edit `.env.local`:
+Configure `.env.local`:
 
 ```env
 ANTHROPIC_API_KEY=sk-ant-your-real-key
-# optional:
+# optional
 # ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ```
 
-Restart dev server after env changes.
+## iPhone Runbook (Recommended: Cloudflare Tunnel)
 
-### 2. Start server for mobile access
+### 1) Install cloudflared (without brew)
+
+```bash
+./scripts/install-cloudflared-macos.sh
+```
+
+If needed, add the install folder to PATH:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### 2) Start app + tunnel on Mac
+
+Terminal A:
 
 ```bash
 npm run dev:mobile
 ```
 
-Find your Mac LAN IP:
+Terminal B:
 
 ```bash
-ipconfig getifaddr en0
+cloudflared tunnel --url http://localhost:3000
 ```
 
-If empty, try:
+Copy the `https://...trycloudflare.com` URL and open it in Safari on iPhone.
+
+### 3) Preflight check (must return JSON)
 
 ```bash
-ipconfig getifaddr en1
+curl -i -X POST "https://<your-tunnel-domain>/api/recognize" \
+  -H "Content-Type: application/json" \
+  -d '{"imageBase64":"data:image/jpeg;base64,Zm9v"}'
 ```
 
-### 3. Open app on iPhone
+Expected:
+- `Content-Type: application/json`
+- JSON body with either success payload or error payload
 
-1. Connect iPhone and Mac to the same Wi-Fi.
-2. Open Safari on iPhone.
-3. Go to `http://YOUR_LAN_IP:3000`.
-4. Allow camera access when prompted.
+## API Contract (`POST /api/recognize`)
 
-### 4. Execute milestone scenario
+Success:
 
-1. Point camera at painting image on monitor.
-2. Tap `Scan Painting`.
-3. Tap `Recognize Painting`.
-4. Wait for result card (title, artist, year, museum, style, summary).
+```json
+{
+  "painting": "string",
+  "artist": "string",
+  "year": "string",
+  "museum": "string",
+  "style": "string",
+  "confidence": "high|medium|low",
+  "summary": "string",
+  "requestId": "string"
+}
+```
 
-## HTTPS fallback for iPhone camera restrictions
+Error:
 
-If iPhone blocks camera in LAN HTTP context, run an HTTPS tunnel and open that URL:
+```json
+{
+  "error": "string",
+  "code": "bad_request|billing|timeout|upstream_error|non_json_response|network",
+  "requestId": "string"
+}
+```
+
+Every response also includes header `x-request-id`.
+
+## How To Prove Request Reached Claude
+
+1. In UI error/success state, copy `requestId`.
+2. In dev server logs, find records with the same `requestId`.
+3. Successful Claude path has stages:
+   - `claude_call_start`
+   - `claude_call_end`
+4. Failed Claude path has:
+   - `claude_call_error`
+
+## Camera + Recognition Troubleshooting
+
+| Symptom | Probable Cause | Action |
+|---|---|---|
+| Camera error says HTTPS required | Insecure context | Open only tunnel HTTPS URL |
+| Green indicator, black preview | Playback/attachment issue | Tap `Retry camera`, keep page foregrounded |
+| `code=billing` | Claude credits exhausted | Top up Anthropic credits |
+| `code=timeout` | Upstream timeout | Retry once, verify network quality |
+| `code=non_json_response` | Tunnel/proxy injected non-JSON page | Restart `cloudflared` and retry |
+| `code=network` | Connectivity issue | Verify Mac internet and tunnel status |
+
+## M2 Validation (5 paintings)
+
+Target: at least `4/5` successful recognitions.
+
+| Painting input | requestId | HTTP status | result/error code | recognized name | pass/fail |
+|---|---|---|---|---|---|
+| Mona Lisa |  |  |  |  |  |
+| The Starry Night |  |  |  |  |  |
+| The Scream |  |  |  |  |  |
+| Girl with a Pearl Earring |  |  |  |  |  |
+| The Night Watch |  |  |  |  |  |
+
+## Legacy Fallback (not recommended)
+
+`localtunnel` may require password and can return HTML interstitial responses:
 
 ```bash
 npx localtunnel --port 3000
 ```
-
-Use the `https://...` URL from localtunnel in Safari on iPhone.
-
-If localtunnel asks for a password on iPhone, get it on Mac:
-
-```bash
-curl https://loca.lt/mytunnelpassword
-```
-
-Enter that value into the `Tunnel password` prompt.
-
-## Camera Troubleshooting (iPhone)
-
-When camera preview is black or unavailable:
-
-1. Open the app only via `https://...loca.lt` URL (not `http://192.168...`).
-2. Use Safari first (disable in-app browsers).
-3. Close apps that can hold camera (Camera, Telegram, Zoom, Meet).
-4. Tap `Retry camera`.
-5. If still broken, reload page once and allow camera again.
-
-## Camera Diagnostics Matrix
-
-| Symptom | Probable Cause | Action |
-|---|---|---|
-| "Camera requires HTTPS..." error | Insecure context | Open tunnel URL `https://...loca.lt` |
-| Permission prompt appears, then error about denied access | Permission denied in browser settings | Enable camera for site in Safari settings, then `Retry camera` |
-| Green camera indicator but black preview | Stream attached late / playback issue | Tap `Retry camera`; keep page in foreground; reopen in Safari |
-| Error says camera busy | Another app is using camera | Close other camera apps, then `Retry camera` |
-| Rear camera constraint fails | Device/browser cannot satisfy `facingMode` | App auto-falls back to generic camera (`video: true`) |
-
-## M1 Acceptance Checklist
-
-- `npm run build` succeeds.
-- iPhone opens app and requests camera permission.
-- Scan -> Recognize returns non-empty AI response in UI.
-- User sees clear error and can retry on failure.
-
-## Negative Tests
-
-### Empty payload (expect 400)
-
-```bash
-curl -i -X POST http://127.0.0.1:3000/api/recognize \
-  -H "Content-Type: application/json" \
-  -d '{}'
-```
-
-### Invalid data URL format (expect 400)
-
-```bash
-curl -i -X POST http://127.0.0.1:3000/api/recognize \
-  -H "Content-Type: application/json" \
-  -d '{"imageBase64":"not-a-data-url"}'
-```
-
-### Missing/invalid API key (expect 500 for missing placeholder, 502 for bad key)
-
-Set bad key in `.env.local`, restart server, then run a recognition request.
-
-## Tech Stack
-
-- **Next.js 14** — App Router + Route Handlers
-- **PWA (Serwist)** — installable shell + offline page
-- **Claude API** — vision recognition via `@anthropic-ai/sdk`
-- **Tailwind CSS** — mobile-first UI

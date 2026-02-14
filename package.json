@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:mobile": "next dev --hostname 0.0.0.0",
+    "tunnel:cloudflare": "cloudflared tunnel --url http://localhost:3000",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
