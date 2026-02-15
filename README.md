@@ -1,6 +1,6 @@
-# 🎨 Hearitage — AI Museum Guide (M3)
+# 🎨 Hearitage — AI Museum Guide (M5.2)
 
-> Production-first validation on Vercel: iPhone camera -> Claude Vision -> structured JSON result.
+> Production-first validation on Vercel: iPhone camera -> Claude Vision -> recognition + internet fact-check.
 
 ## Where To Put Anthropic Key (Best Practices)
 
@@ -18,6 +18,20 @@ In Vercel Project -> Settings -> Environment Variables add:
 
 - `ANTHROPIC_API_KEY`
 - `ANTHROPIC_MODEL` (optional, default: `claude-sonnet-4-20250514`)
+- `FACTCHECK_MODE` (optional, `off|shadow|enrich`, default: `shadow`)
+- `FACTCHECK_BUDGET_MS` (optional, default: `1800`)
+- `FACTCHECK_PHASE_A_BUDGET_MS` (optional, default: `900`)
+- `FACTCHECK_RESPONSE_BUFFER_MS` (optional, default: `200`)
+- `FACTCHECK_PROVIDER_TIMEOUT_MS` (optional, default: `800`)
+- `FACTCHECK_CLAUDE_TIMEOUT_MS` (optional, default: `1200`)
+- `FACTCHECK_MAX_FACTS` (optional, default: `3`)
+- `FACTCHECK_CACHE_TTL_MS` (optional, default: `21600000`, 6h)
+
+Fact-check modes:
+
+- `off`: skip fact-check step completely.
+- `shadow`: run fact-check for diagnostics, but do not alter summary/facts in response.
+- `enrich`: apply verified facts and summary addon.
 
 Assign env scopes explicitly:
 
@@ -69,7 +83,15 @@ Success:
   "museum": "string",
   "style": "string",
   "confidence": "high|medium|low",
+  "reasoning": "string",
   "summary": "string",
+  "facts": ["string"],
+  "factCheck": {
+    "status": "verified|partial|skipped_timeout|skipped_no_evidence",
+    "verifiedFacts": 0,
+    "sources": ["string"],
+    "latencyMs": 0
+  },
   "requestId": "string"
 }
 ```
@@ -85,6 +107,34 @@ Error:
 ```
 
 Response header always includes `x-request-id`.
+
+## M5.2 Recognition + Fact-Check Validation
+
+Goal: `>=4/5` correct recognitions on production.
+
+Test set:
+
+- Mona Lisa
+- The Starry Night
+- The Scream
+- Girl with a Pearl Earring
+- The Night Watch
+
+For each attempt, record:
+
+- `requestId`
+- `HTTP status`
+- `confidence`
+- `factCheck.status`
+- `factCheck.verifiedFacts`
+- recognized `painting` / `artist`
+- `pass` / `fail`
+
+Interpretation rule:
+
+- Success means painting and artist are semantically correct.
+- Target bar: `>=4/5` successful recognitions.
+- For non-low confidence responses, expect `facts` to be non-empty in most cases.
 
 ## How To Prove Request Reached Claude (Vercel)
 

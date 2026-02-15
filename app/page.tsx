@@ -22,20 +22,43 @@ const confidenceStyleMap: Record<RecognitionResponse["confidence"], string> = {
   low: "bg-rose-500/20 text-rose-300 border border-rose-400/40",
 };
 
+const factCheckStatusStyleMap: Record<RecognitionResponse["factCheck"]["status"], string> = {
+  verified: "bg-emerald-500/15 text-emerald-300 border border-emerald-400/40",
+  partial: "bg-amber-500/15 text-amber-300 border border-amber-400/40",
+  skipped_timeout: "bg-rose-500/15 text-rose-300 border border-rose-400/40",
+  skipped_no_evidence: "bg-slate-500/15 text-slate-300 border border-slate-400/40",
+};
+
+const factCheckStatusLabelMap: Record<
+  RecognitionResponse["factCheck"]["status"],
+  string
+> = {
+  verified: "Fact-check verified",
+  partial: "Fact-check partial",
+  skipped_timeout: "Fact-check timeout",
+  skipped_no_evidence: "Fact-check skipped",
+};
+
 const humanMessageByCode: Record<RecognitionErrorCode, string> = {
-  bad_request: "Некорректный запрос распознавания. Переснимите картину и попробуйте снова.",
+  bad_request: "Invalid recognition request. Retake the photo and try again.",
   misconfigured_env:
     "Server misconfiguration: missing ANTHROPIC_API_KEY in deployment.",
-  billing:
-    "Не хватает баланса Claude API. Пополните кредиты и повторите попытку.",
-  timeout: "Claude не ответил вовремя. Проверьте сеть и попробуйте еще раз.",
-  upstream_error: "Сервис распознавания временно недоступен. Повторите попытку.",
+  billing: "Claude API credits are exhausted. Top up and try again.",
+  timeout: "Claude timed out. Check your connection and retry.",
+  upstream_error: "Recognition service is temporarily unavailable. Please retry.",
   non_json_response:
-    "Туннель/прокси вернул неожиданный ответ. Перезапустите tunnel и попробуйте снова.",
-  network: "Сетевой сбой при обращении к API. Проверьте соединение и повторите попытку.",
+    "Unexpected proxy/tunnel response. Restart the tunnel and try again.",
+  network: "Network error while contacting API. Check your connection and retry.",
 };
 
 const REQUEST_TIMEOUT_MS = 35_000;
+
+const DEFAULT_FACTCHECK: RecognitionResponse["factCheck"] = {
+  status: "skipped_no_evidence",
+  verifiedFacts: 0,
+  sources: [],
+  latencyMs: 0,
+};
 
 const generateRequestId = () => {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -52,6 +75,45 @@ const toJsonObject = async (response: Response): Promise<Record<string, unknown>
   } catch {
     return null;
   }
+};
+
+const toFactCheck = (raw: unknown): RecognitionResponse["factCheck"] => {
+  if (!raw || typeof raw !== "object") return DEFAULT_FACTCHECK;
+  const payload = raw as {
+    status?: unknown;
+    verifiedFacts?: unknown;
+    sources?: unknown;
+    latencyMs?: unknown;
+  };
+
+  const status =
+    payload.status === "verified" ||
+    payload.status === "partial" ||
+    payload.status === "skipped_timeout" ||
+    payload.status === "skipped_no_evidence"
+      ? payload.status
+      : DEFAULT_FACTCHECK.status;
+
+  const verifiedFacts =
+    typeof payload.verifiedFacts === "number" && Number.isFinite(payload.verifiedFacts)
+      ? payload.verifiedFacts
+      : 0;
+
+  const sources = Array.isArray(payload.sources)
+    ? payload.sources.filter((item): item is string => typeof item === "string")
+    : [];
+
+  const latencyMs =
+    typeof payload.latencyMs === "number" && Number.isFinite(payload.latencyMs)
+      ? payload.latencyMs
+      : 0;
+
+  return {
+    status,
+    verifiedFacts,
+    sources,
+    latencyMs,
+  };
 };
 
 export default function Home() {
@@ -142,6 +204,10 @@ export default function Home() {
       if (
         !payload ||
         typeof payload.painting !== "string" ||
+        typeof payload.artist !== "string" ||
+        typeof payload.confidence !== "string" ||
+        typeof payload.summary !== "string" ||
+        typeof payload.reasoning !== "string" ||
         typeof payload.requestId !== "string"
       ) {
         setRecognitionDiagnostics({
@@ -150,13 +216,34 @@ export default function Home() {
           contentType,
         });
         throw {
-          error: "Сервер вернул неожиданный JSON-формат ответа.",
+          error: "Server returned an unexpected JSON response format.",
           code: "non_json_response",
           requestId: responseRequestId,
         } as RecognitionErrorResponse;
       }
 
-      setRecognitionResult(payload as RecognitionResponse);
+      const normalizedPayload: RecognitionResponse = {
+        painting: payload.painting,
+        artist: payload.artist,
+        year: typeof payload.year === "string" ? payload.year : "unknown",
+        museum: typeof payload.museum === "string" ? payload.museum : "unknown",
+        style: typeof payload.style === "string" ? payload.style : "unknown",
+        confidence:
+          payload.confidence === "high" ||
+          payload.confidence === "medium" ||
+          payload.confidence === "low"
+            ? payload.confidence
+            : "low",
+        summary: payload.summary,
+        reasoning: payload.reasoning,
+        facts: Array.isArray(payload.facts)
+          ? payload.facts.filter((item): item is string => typeof item === "string")
+          : [],
+        factCheck: toFactCheck(payload.factCheck),
+        requestId: payload.requestId,
+      };
+
+      setRecognitionResult(normalizedPayload);
       setRecognitionState("success");
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -235,7 +322,7 @@ export default function Home() {
       {recognitionState === "loading" ? (
         <div className="w-full max-w-sm mb-4 p-4 rounded-2xl border border-[var(--color-border)] bg-surface-raised">
           <p className="text-sm text-[var(--color-text-muted)]">
-            Анализирую изображение... Обычно это занимает несколько секунд.
+            Analyzing painting... This usually takes a few seconds.
           </p>
         </div>
       ) : null}
@@ -274,7 +361,7 @@ export default function Home() {
             onClick={handleScanAnother}
             className="mt-3 w-full py-2.5 rounded-xl border border-rose-300/40 text-rose-100 hover:bg-rose-500/20 transition"
           >
-            Попробовать снова
+            Try again
           </button>
         </div>
       ) : null}
@@ -295,16 +382,55 @@ export default function Home() {
             {recognitionResult.artist} · {recognitionResult.year}
           </p>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Музей: {recognitionResult.museum}
+            Museum: {recognitionResult.museum}
           </p>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Стиль: {recognitionResult.style}
+            Style: {recognitionResult.style}
           </p>
+          <div className="flex items-center gap-2">
+            <span
+              className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${factCheckStatusStyleMap[recognitionResult.factCheck.status]}`}
+            >
+              {factCheckStatusLabelMap[recognitionResult.factCheck.status]}
+            </span>
+            {process.env.NODE_ENV !== "production" ? (
+              <span className="text-[11px] text-[var(--color-text-muted)]">
+                {recognitionResult.factCheck.latencyMs}ms
+              </span>
+            ) : null}
+          </div>
           <p className="text-sm leading-relaxed">{recognitionResult.summary}</p>
-          {process.env.NODE_ENV !== "production" ? (
-            <p className="text-xs text-[var(--color-text-muted)]">
-              Request ID: <code>{recognitionResult.requestId}</code>
+          {recognitionResult.facts.length > 0 ? (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                Interesting facts
+              </p>
+              <ul className="space-y-1 text-sm text-[var(--color-text-muted)]">
+                {recognitionResult.facts.map((fact, index) => (
+                  <li key={`${index}-${fact.slice(0, 20)}`}>• {fact}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {recognitionResult.confidence !== "high" && recognitionResult.reasoning ? (
+            <p className="text-xs text-[var(--color-text-muted)] italic">
+              {recognitionResult.reasoning}
             </p>
+          ) : null}
+          {process.env.NODE_ENV !== "production" ? (
+            <div className="space-y-1">
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Request ID: <code>{recognitionResult.requestId}</code>
+              </p>
+              <p className="text-xs text-[var(--color-text-muted)] break-words">
+                Fact-check sources:{" "}
+                <code>
+                  {recognitionResult.factCheck.sources.length > 0
+                    ? recognitionResult.factCheck.sources.join(", ")
+                    : "none"}
+                </code>
+              </p>
+            </div>
           ) : null}
           <button
             onClick={handleScanAnother}
@@ -316,7 +442,7 @@ export default function Home() {
       ) : null}
 
       <p className="text-center text-[var(--color-text-muted)] text-xs pb-4">
-        M1 local test mode
+        Hearitage beta
       </p>
     </main>
   );
