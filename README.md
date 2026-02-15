@@ -1,6 +1,6 @@
-# 🎨 Hearitage — AI Museum Guide (M3)
+# 🎨 Hearitage — AI Museum Guide (M6)
 
-> Production-first validation on Vercel: iPhone camera -> Claude Vision -> structured JSON result.
+> Production-first validation on Vercel: iPhone camera -> Claude Vision + Google Vision -> merged JSON result.
 
 ## Where To Put Anthropic Key (Best Practices)
 
@@ -18,6 +18,14 @@ In Vercel Project -> Settings -> Environment Variables add:
 
 - `ANTHROPIC_API_KEY`
 - `ANTHROPIC_MODEL` (optional, default: `claude-sonnet-4-20250514`)
+- `GOOGLE_CLOUD_VISION_KEY`
+- `GOOGLE_VISION_MODE` (optional: `off|shadow|enrich`, default: `enrich`)
+
+`GOOGLE_VISION_MODE` behavior:
+
+- `off`: Claude only
+- `shadow`: call Google Vision and log it, but return Claude-only output
+- `enrich`: call Google Vision and run merge step (recommended for production)
 
 Assign env scopes explicitly:
 
@@ -69,6 +77,7 @@ Success:
   "museum": "string",
   "style": "string",
   "confidence": "high|medium|low",
+  "reasoning": "string",
   "summary": "string",
   "requestId": "string"
 }
@@ -86,13 +95,17 @@ Error:
 
 Response header always includes `x-request-id`.
 
-## How To Prove Request Reached Claude (Vercel)
+## How To Prove Request Reached Pipeline (Vercel)
 
 1. Copy `requestId` from UI.
 2. In Vercel -> Project -> Logs, search by this `requestId`.
-3. If request reached Claude, you should see:
+3. You should see:
+   - `pipeline_start`
    - `claude_call_start`
    - `claude_call_end` or `claude_call_error`
+   - `google_vision_start` and `google_vision_end` (if mode is not `off`)
+   - `merge_start` and `merge_end` (if mode is `enrich` and Google had usable data)
+   - `pipeline_end`
 
 ## Troubleshooting Matrix
 
@@ -105,17 +118,19 @@ Response header always includes `x-request-id`.
 | `code=non_json_response` | Proxy/tunnel returned HTML | Verify production URL and CDN path |
 | `code=network` | Server-to-Claude networking issue | Check Vercel function logs and retry |
 
-## M3 Validation Protocol (5 Paintings)
+## M6 Validation Protocol (7 Paintings)
 
-Goal: `>=4/5` correct recognitions on production.
+Goal: `>=5/7` correct recognitions on production.
 
 | Painting input | requestId | HTTP status | result/error code | recognized name | pass/fail |
 |---|---|---|---|---|---|
 | Mona Lisa |  |  |  |  |  |
 | The Starry Night |  |  |  |  |  |
-| The Scream |  |  |  |  |  |
-| Girl with a Pearl Earring |  |  |  |  |  |
-| The Night Watch |  |  |  |  |  |
+| Self-Portrait with Daughters (Zinaida Serebriakova) |  |  |  |  |  |
+| Girl with Peaches (Valentin Serov) |  |  |  |  |  |
+| Black Square (Kazimir Malevich) |  |  |  |  |  |
+| Lesser-known painting |  |  |  |  |  |
+| Non-painting image |  |  |  |  |  |
 
 ## Local Development (Optional)
 

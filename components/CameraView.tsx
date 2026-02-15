@@ -17,23 +17,23 @@ type CameraViewProps = {
   isRecognizing?: boolean;
 };
 
-const MAX_IMAGE_SIZE = 1024;
-const JPEG_QUALITY = 0.7;
+const MAX_IMAGE_SIZE = 1536;
+const JPEG_QUALITY = 0.8;
 
 const CAMERA_ERROR_MESSAGES: Record<CameraErrorCode, string> = {
   api_unavailable:
     "Camera API is unavailable in this context. Open in Safari and try again.",
   secure_context:
-    "Камера требует HTTPS. Откройте страницу через tunnel URL (https://...loca.lt).",
+    "Camera requires HTTPS. Open the page via a secure tunnel URL (https://...).",
   permission_denied:
-    "Доступ к камере отклонен. Разрешите камеру для сайта и нажмите Retry camera.",
+    "Camera access denied. Allow camera permissions in browser settings and tap Retry camera.",
   camera_busy:
-    "Камера занята другим приложением. Закройте Camera/Telegram/Zoom и нажмите Retry camera.",
+    "Camera is in use by another app. Close Camera/Telegram/Zoom and tap Retry camera.",
   camera_not_found:
-    "Камера не найдена. Проверьте устройство или попробуйте загрузить фото.",
+    "Camera not found. Check your device or upload a photo instead.",
   playback_failed:
-    "Не удалось запустить превью камеры. Нажмите Retry camera.",
-  unknown: "Не удалось запустить камеру. Нажмите Retry camera.",
+    "Could not start camera preview. Tap Retry camera.",
+  unknown: "Could not start camera. Tap Retry camera.",
 };
 
 const getErrorName = (error: unknown) => {
@@ -339,7 +339,7 @@ export default function CameraView({
             </button>
             {!onRecognize ? (
               <p className="text-center text-[var(--color-text-muted)] text-xs">
-                Recognition will be подключено на следующем шаге.
+                Recognition will be connected in the next step.
               </p>
             ) : null}
           </>
