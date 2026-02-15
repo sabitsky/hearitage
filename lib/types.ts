@@ -15,6 +15,7 @@ export type RecognitionResponse = {
   museum: string;
   style: string;
   confidence: RecognitionConfidence;
+  reasoning: string;
   summary: string;
   requestId: string;
 };

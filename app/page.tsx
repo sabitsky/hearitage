@@ -23,16 +23,13 @@ const confidenceStyleMap: Record<RecognitionResponse["confidence"], string> = {
 };
 
 const humanMessageByCode: Record<RecognitionErrorCode, string> = {
-  bad_request: "Некорректный запрос распознавания. Переснимите картину и попробуйте снова.",
-  misconfigured_env:
-    "Server misconfiguration: missing ANTHROPIC_API_KEY in deployment.",
-  billing:
-    "Не хватает баланса Claude API. Пополните кредиты и повторите попытку.",
-  timeout: "Claude не ответил вовремя. Проверьте сеть и попробуйте еще раз.",
-  upstream_error: "Сервис распознавания временно недоступен. Повторите попытку.",
-  non_json_response:
-    "Туннель/прокси вернул неожиданный ответ. Перезапустите tunnel и попробуйте снова.",
-  network: "Сетевой сбой при обращении к API. Проверьте соединение и повторите попытку.",
+  bad_request: "Invalid request. Please retake the photo and try again.",
+  misconfigured_env: "Server misconfiguration: missing API key.",
+  billing: "API credits exhausted. Please top up and try again.",
+  timeout: "Recognition timed out. Check your connection and try again.",
+  upstream_error: "Recognition service temporarily unavailable. Please retry.",
+  non_json_response: "Unexpected server response. Please try again.",
+  network: "Network error. Please check your connection and retry.",
 };
 
 const REQUEST_TIMEOUT_MS = 35_000;
@@ -142,6 +139,10 @@ export default function Home() {
       if (
         !payload ||
         typeof payload.painting !== "string" ||
+        typeof payload.artist !== "string" ||
+        typeof payload.confidence !== "string" ||
+        typeof payload.summary !== "string" ||
+        typeof payload.reasoning !== "string" ||
         typeof payload.requestId !== "string"
       ) {
         setRecognitionDiagnostics({
@@ -150,13 +151,30 @@ export default function Home() {
           contentType,
         });
         throw {
-          error: "Сервер вернул неожиданный JSON-формат ответа.",
+          error: "Server returned an unexpected JSON response format.",
           code: "non_json_response",
           requestId: responseRequestId,
         } as RecognitionErrorResponse;
       }
 
-      setRecognitionResult(payload as RecognitionResponse);
+      const normalizedPayload: RecognitionResponse = {
+        painting: payload.painting,
+        artist: payload.artist,
+        year: typeof payload.year === "string" ? payload.year : "Unknown",
+        museum: typeof payload.museum === "string" ? payload.museum : "Unknown",
+        style: typeof payload.style === "string" ? payload.style : "Unknown",
+        confidence:
+          payload.confidence === "high" ||
+          payload.confidence === "medium" ||
+          payload.confidence === "low"
+            ? payload.confidence
+            : "low",
+        summary: payload.summary,
+        reasoning: payload.reasoning,
+        requestId: payload.requestId,
+      };
+
+      setRecognitionResult(normalizedPayload);
       setRecognitionState("success");
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -235,7 +253,7 @@ export default function Home() {
       {recognitionState === "loading" ? (
         <div className="w-full max-w-sm mb-4 p-4 rounded-2xl border border-[var(--color-border)] bg-surface-raised">
           <p className="text-sm text-[var(--color-text-muted)]">
-            Анализирую изображение... Обычно это занимает несколько секунд.
+            Analyzing painting... This usually takes a few seconds.
           </p>
         </div>
       ) : null}
@@ -274,7 +292,7 @@ export default function Home() {
             onClick={handleScanAnother}
             className="mt-3 w-full py-2.5 rounded-xl border border-rose-300/40 text-rose-100 hover:bg-rose-500/20 transition"
           >
-            Попробовать снова
+            Try again
           </button>
         </div>
       ) : null}
@@ -295,12 +313,17 @@ export default function Home() {
             {recognitionResult.artist} · {recognitionResult.year}
           </p>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Музей: {recognitionResult.museum}
+            Museum: {recognitionResult.museum}
           </p>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Стиль: {recognitionResult.style}
+            Style: {recognitionResult.style}
           </p>
           <p className="text-sm leading-relaxed">{recognitionResult.summary}</p>
+          {recognitionResult.confidence !== "high" && recognitionResult.reasoning ? (
+            <p className="text-xs text-[var(--color-text-muted)] italic mt-2">
+              {recognitionResult.reasoning}
+            </p>
+          ) : null}
           {process.env.NODE_ENV !== "production" ? (
             <p className="text-xs text-[var(--color-text-muted)]">
               Request ID: <code>{recognitionResult.requestId}</code>
@@ -316,7 +339,7 @@ export default function Home() {
       ) : null}
 
       <p className="text-center text-[var(--color-text-muted)] text-xs pb-4">
-        M1 local test mode
+        Hearitage beta
       </p>
     </main>
   );
