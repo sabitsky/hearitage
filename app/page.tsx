@@ -338,9 +338,29 @@ export default function Home() {
         </section>
       ) : null}
 
-      <p className="text-center text-[var(--color-text-muted)] text-xs pb-4">
-        Hearitage beta
-      </p>
+      <footer className="text-center text-xs pb-4 space-y-2">
+        <p className="text-[var(--color-text-muted)]">Hearitage beta</p>
+        <nav className="flex justify-center gap-4 text-[var(--color-text-muted)]">
+          <a
+            href="/terms"
+            className="underline underline-offset-2 hover:text-[var(--color-text)] transition"
+          >
+            Terms
+          </a>
+          <a
+            href="/privacy"
+            className="underline underline-offset-2 hover:text-[var(--color-text)] transition"
+          >
+            Privacy
+          </a>
+          <a
+            href="/refund"
+            className="underline underline-offset-2 hover:text-[var(--color-text)] transition"
+          >
+            Refunds
+          </a>
+        </nav>
+      </footer>
     </main>
   );
 }
