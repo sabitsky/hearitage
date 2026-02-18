@@ -234,12 +234,15 @@ export default function Home() {
   };
 
   return (
-    <main className="flex-1 flex flex-col items-center px-6 py-8">
+    <main className="flex-1 flex flex-col items-center px-6 py-4">
       <header className="w-full text-center pt-4">
         <h1 className="font-display text-3xl font-semibold tracking-tight">
           Hearitage
         </h1>
-        <p className="text-[var(--color-text-muted)] text-sm mt-1 font-light">
+        <p className="text-brand-400/80 text-[11px] font-semibold tracking-[0.22em] uppercase mt-2">
+          AI Art Guide
+        </p>
+        <p className="text-[var(--color-text-muted)] text-xs mt-1 font-light opacity-50">
           Point. Scan. Listen.
         </p>
       </header>

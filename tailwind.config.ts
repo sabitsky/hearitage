@@ -34,6 +34,8 @@ const config: Config = {
         "fade-in": "fadeIn 0.6s ease-out forwards",
         "slide-up": "slideUp 0.5s ease-out forwards",
         "pulse-slow": "pulse 3s ease-in-out infinite",
+        "slide-up-delayed": "slideUp 0.5s 0.15s ease-out forwards",
+        "subtle-pulse": "subtlePulse 2s ease-in-out infinite",
       },
       keyframes: {
         fadeIn: {
@@ -43,6 +45,10 @@ const config: Config = {
         slideUp: {
           "0%": { opacity: "0", transform: "translateY(20px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        subtlePulse: {
+          "0%, 100%": { boxShadow: "0 0 20px rgba(16, 185, 129, 0.2)" },
+          "50%": { boxShadow: "0 0 35px rgba(16, 185, 129, 0.45)" },
         },
       },
     },

@@ -253,12 +253,12 @@ export default function CameraView({
 
   return (
     <div className="flex-1 flex flex-col items-center justify-between w-full max-w-sm">
-      <div className="flex-1 flex items-center justify-center w-full my-8">
+      <div className="flex-1 flex items-center justify-center w-full my-4">
         <div className="relative w-full aspect-[3/4] rounded-2xl border border-[var(--color-border)] bg-surface-raised overflow-hidden">
-          <div className="absolute top-3 left-3 w-6 h-6 border-t-2 border-l-2 border-brand-400/40 rounded-tl-sm" />
-          <div className="absolute top-3 right-3 w-6 h-6 border-t-2 border-r-2 border-brand-400/40 rounded-tr-sm" />
-          <div className="absolute bottom-3 left-3 w-6 h-6 border-b-2 border-l-2 border-brand-400/40 rounded-bl-sm" />
-          <div className="absolute bottom-3 right-3 w-6 h-6 border-b-2 border-r-2 border-brand-400/40 rounded-br-sm" />
+          <div className={`absolute top-3 left-3 w-6 h-6 border-t-2 border-l-2 rounded-tl-sm transition-colors duration-300 ${imageData ? "border-emerald-400/50" : "border-brand-400/40"}`} />
+          <div className={`absolute top-3 right-3 w-6 h-6 border-t-2 border-r-2 rounded-tr-sm transition-colors duration-300 ${imageData ? "border-emerald-400/50" : "border-brand-400/40"}`} />
+          <div className={`absolute bottom-3 left-3 w-6 h-6 border-b-2 border-l-2 rounded-bl-sm transition-colors duration-300 ${imageData ? "border-emerald-400/50" : "border-brand-400/40"}`} />
+          <div className={`absolute bottom-3 right-3 w-6 h-6 border-b-2 border-r-2 rounded-br-sm transition-colors duration-300 ${imageData ? "border-emerald-400/50" : "border-brand-400/40"}`} />
 
           {showVideoLayer ? (
             <video
@@ -323,19 +323,37 @@ export default function CameraView({
       <div className="w-full pb-4 space-y-3">
         {imageData ? (
           <>
+            {!isRecognizing && (
+              <p className="text-center text-xs text-[var(--color-text-muted)] animate-fade-in pb-1">
+                Photo captured — tap below to identify
+              </p>
+            )}
             <button
               onClick={handleRecognize}
               disabled={!onRecognize || isRecognizing}
-              className="w-full py-4 rounded-2xl bg-brand-500 disabled:bg-brand-500/50 hover:bg-brand-600 active:scale-[0.98] text-white font-semibold text-base tracking-wide transition-all duration-200 ease-out shadow-[0_0_30px_rgba(214,125,36,0.2)]"
+              className="w-full py-4 rounded-2xl bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-500/50 disabled:cursor-not-allowed active:scale-[0.98] text-white font-bold text-base tracking-wide transition-all duration-200 ease-out shadow-[0_0_30px_rgba(16,185,129,0.25)] animate-subtle-pulse"
             >
-              {isRecognizing ? "Analyzing..." : "Recognize Painting"}
+              {isRecognizing ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Analyzing...
+                </span>
+              ) : (
+                <span className="flex items-center justify-center gap-2">
+                  <span aria-hidden="true">✦</span>
+                  Identify This Painting
+                </span>
+              )}
             </button>
             <button
               onClick={handleRetake}
               disabled={isRecognizing}
               className="w-full py-3 rounded-2xl border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50 disabled:cursor-not-allowed transition"
             >
-              Retake
+              ← Retake
             </button>
             {!onRecognize ? (
               <p className="text-center text-[var(--color-text-muted)] text-xs">
