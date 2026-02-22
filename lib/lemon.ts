@@ -66,14 +66,14 @@ export function initLemon(): void {
 
 function waitForLemon(timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
-    if (typeof window !== "undefined" && window.LemonSqueezy) {
+    if (typeof window !== "undefined" && window.createLemonSqueezy) {
       resolve();
       return;
     }
 
     const start = Date.now();
     const interval = setInterval(() => {
-      if (typeof window !== "undefined" && window.LemonSqueezy) {
+      if (typeof window !== "undefined" && window.createLemonSqueezy) {
         clearInterval(interval);
         resolve();
       } else if (Date.now() - start > timeoutMs) {
