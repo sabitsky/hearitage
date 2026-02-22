@@ -210,6 +210,7 @@ const createErrorResponse = (
     status,
     headers: {
       "x-request-id": requestId,
+      "x-scans-remaining": "-1",
     },
   });
 };
@@ -226,6 +227,7 @@ const createSuccessResponse = (
     status: 200,
     headers: {
       "x-request-id": requestId,
+      "x-scans-remaining": "-1",
     },
   });
 };
@@ -520,9 +522,13 @@ Combine these sources and return the most accurate identification as JSON:
 
 export async function POST(request: Request) {
   const requestId = createRequestId(request);
+  const deviceId = request.headers.get("x-device-id") || "anonymous";
+  // TODO [paywall-v2]: Insert checkScanQuota(deviceId) middleware here.
+  // When server DB is ready, verify subscription status and reject with 402 if quota exceeded.
   logStage(requestId, "received", {
     contentLength: request.headers.get("content-length") || "unknown",
     userAgent: request.headers.get("user-agent") || "unknown",
+    deviceId,
   });
 
   const body = await parseRequestBody(request);
@@ -531,6 +537,7 @@ export async function POST(request: Request) {
   if (!imageBase64) {
     logStage(requestId, "validation_failed", {
       reason: "missing_imageBase64",
+      deviceId,
     });
     return createErrorResponse(
       requestId,
@@ -544,6 +551,7 @@ export async function POST(request: Request) {
   if (!matchedImage) {
     logStage(requestId, "validation_failed", {
       reason: "invalid_data_url",
+      deviceId,
     });
     return createErrorResponse(
       requestId,
@@ -560,6 +568,7 @@ export async function POST(request: Request) {
   if (!apiKey || apiKey === "sk-ant-your-key-here") {
     logStage(requestId, "validation_failed", {
       reason: "missing_api_key",
+      deviceId,
     });
     return createErrorResponse(
       requestId,
@@ -574,17 +583,18 @@ export async function POST(request: Request) {
     payloadChars: encodedImage.length,
     model: DEFAULT_MODEL,
     googleVisionMode: GOOGLE_VISION_MODE,
+    deviceId,
   });
 
   const anthropic = new Anthropic({ apiKey });
-  logStage(requestId, "pipeline_start");
+  logStage(requestId, "pipeline_start", { deviceId });
 
   try {
     const claudePromise = (async (): Promise<Omit<RecognitionResponse, "requestId"> | null> => {
       const startedAt = Date.now();
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), RECOGNIZE_TIMEOUT_MS);
-      logStage(requestId, "claude_call_start");
+      logStage(requestId, "claude_call_start", { deviceId });
 
       try {
         const message = await anthropic.messages.create(
@@ -620,6 +630,7 @@ export async function POST(request: Request) {
           latencyMs: Date.now() - startedAt,
           inputTokens: message.usage?.input_tokens ?? null,
           outputTokens: message.usage?.output_tokens ?? null,
+          deviceId,
         });
 
         const modelText = message.content
@@ -628,7 +639,10 @@ export async function POST(request: Request) {
           .trim();
         const jsonStr = extractJson(modelText);
         if (!jsonStr) {
-          logStage(requestId, "claude_parse_failed", { rawLength: modelText.length });
+          logStage(requestId, "claude_parse_failed", {
+            rawLength: modelText.length,
+            deviceId,
+          });
           return null;
         }
         return sanitizeResponse(JSON.parse(jsonStr));
@@ -638,6 +652,7 @@ export async function POST(request: Request) {
           code: normalizedError.code,
           message: normalizedError.message,
           latencyMs: Date.now() - startedAt,
+          deviceId,
         });
 
         if (!normalizedError.retryable) {
@@ -645,7 +660,7 @@ export async function POST(request: Request) {
         }
 
         try {
-          logStage(requestId, "claude_retry_start");
+          logStage(requestId, "claude_retry_start", { deviceId });
           const retryMessage = await anthropic.messages.create(
             {
               model: DEFAULT_MODEL,
@@ -680,7 +695,7 @@ export async function POST(request: Request) {
             .join("\n")
             .trim();
           const retryJson = extractJson(retryText);
-          logStage(requestId, "claude_retry_end");
+          logStage(requestId, "claude_retry_end", { deviceId });
           if (!retryJson) {
             return null;
           }
@@ -736,6 +751,7 @@ export async function POST(request: Request) {
         googleBestGuess: googleResult?.bestGuessLabels?.[0]?.label ?? "none",
         claudeArtist: claudeResult.artist,
         claudePainting: claudeResult.painting,
+        deviceId,
       });
       logStage(requestId, "pipeline_end", {
         finalConfidence: claudeResult.confidence,
@@ -743,6 +759,7 @@ export async function POST(request: Request) {
         claudeArtist: claudeResult.artist,
         finalArtist: claudeResult.artist,
         changed: false,
+        deviceId,
       });
       return createSuccessResponse(requestId, claudeResult);
     }
@@ -755,6 +772,7 @@ export async function POST(request: Request) {
       claudeArtist: claudeResult.artist,
       finalArtist: finalResult.artist,
       changed: claudeResult.artist !== finalResult.artist,
+      deviceId,
     });
 
     return createSuccessResponse(requestId, finalResult);
@@ -764,6 +782,7 @@ export async function POST(request: Request) {
       code: normalizedError.code,
       status: normalizedError.status,
       message: normalizedError.message,
+      deviceId,
     });
     return createErrorResponse(
       requestId,
