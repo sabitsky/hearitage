@@ -69,3 +69,10 @@ body::after {
     padding-bottom: env(safe-area-inset-bottom);
   }
 }
+
+/* Paywall overlay backdrop */
+.paywall-backdrop {
+  background: rgba(10, 10, 11, 0.92);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
